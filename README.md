@@ -154,7 +154,7 @@ The data in `queries.json` has not been pre-split into training and development 
 Before you begin, make sure you have the following packages installed in your environment:
 
 ```bash
-FlagEmbedding
+FlagEmbedding==1.3.2
 bertopic
 safetensors
 torch==2.4.1        # CUDA 12.1 build
@@ -166,6 +166,8 @@ transformers==4.44.2
 gdown
 socksio
 ```
+
+**Note on `FlagEmbedding`:** version 1.3.2 is the last release that pins `transformers==4.44.2`. Later releases (1.3.5+, 1.4.0) call `AutoModel.from_pretrained(dtype=...)`, a keyword that only exists in much newer `transformers`, so `FlagModel` fails to load `BAAI/bge-large-en-v1.5` and `SH-Recall` cannot run.
 
 **Note on `torch`:** the pinned wheel is the CUDA 12.1 build. The previous pin, `torch==1.13.1+cu117`, predates CUDA 11.8 — the release that introduced Ada (sm_89) support — so it ships no Ada-tuned cuBLAS/cuDNN kernels for GPUs such as the L40S or the RTX 40 series. `torch==2.4.1` on CUDA 12.1 has been verified on an L40S and pairs with the `transformers` and `numpy` versions pinned above. `requirements.txt` already points pip at the matching PyTorch index, so no extra flag is needed.
 

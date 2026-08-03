@@ -49,17 +49,64 @@ fi
 conda create -n surge python=3.10 -y
 conda activate surge
 pip install -r requirements.txt
+
+# ★ 필수 후처리 — 아래 §2.1 참조
+conda install -c conda-forge pyarrow pandas "numpy=1.26.4" -y
 ```
 
 - [ ] `requirements.txt` 첫 줄의 `--extra-index-url https://download.pytorch.org/whl/cu121` 유지할 것. `torch==2.4.1` 을 CUDA 12.1 빌드로 받기 위한 것이다.
 - [ ] 원본 README의 `torch==1.13.1+cu117` 은 CUDA 11.8(= Ada sm_89 지원 도입) 이전 버전이라 L40S용 cuBLAS/cuDNN 커널이 없다. 되돌리지 말 것.
+- [ ] `FlagEmbedding==1.3.2` 핀을 풀지 말 것. §2.2 참조.
 
-검증:
+검증 (env 변수 없이 통과해야 정상):
 
 ```bash
-python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+cd src && python -c "
+import markdownParser, rougeBleuFuncs, structureFuncs, informationFuncs
+from sentence_transformers import CrossEncoder
+from FlagEmbedding import FlagModel
+import sqlite3, torch
+print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 # 2.4.1+cu121 True NVIDIA L40S
 ```
+
+### 2.1 `pip` pyarrow/pandas → `libstdc++` 충돌 ★ 반드시 처리
+
+`pip` 로 설치한 `pyarrow`(및 `pandas`)는 **시스템** `/lib/x86_64-linux-gnu/libstdc++.so.6`(6.0.30)을 먼저 로드한다.
+그 뒤 conda의 `libicui18n.so.78`(→ `_sqlite3` → `nltk` → `rouge_score`)이 `CXXABI_1.3.15` 를 요구하는데,
+같은 SONAME 이 이미 올라와 있어 conda의 최신 `libstdc++`(6.0.35, CXXABI_1.3.17)이 쓰이지 않는다.
+
+```
+ImportError: /lib/x86_64-linux-gnu/libstdc++.so.6: version `CXXABI_1.3.15' not found
+             (required by .../envs/surge/lib/libicui18n.so.78)
+```
+
+`import sqlite3` 단독은 성공하고 `import pandas, sqlite3` 는 실패하는 **로드 순서 의존 버그**라 진단이 까다롭다.
+`ROUGE-BLEU` 지표가 통째로 막힌다.
+
+**해결** — conda-forge 빌드로 교체하면 conda의 `libstdc++` 이 먼저 로드되어 근본적으로 해소된다:
+
+```bash
+conda install -c conda-forge pyarrow pandas "numpy=1.26.4" -y
+```
+
+`numpy=1.26.4` 고정은 필수다. 빼면 numpy 2.2 로 올라가 torch/transformers ABI가 깨진다.
+
+> `LD_LIBRARY_PATH=$CONDA_PREFIX/lib` 로도 해결되지만 **쓰지 말 것.** conda의 OpenSSL을 시스템 `ssh` 가 잡아
+> `OpenSSL version mismatch` 로 SSH push 가 깨진다. (`LD_PRELOAD=$CONDA_PREFIX/lib/libstdc++.so.6` 은
+> 부작용이 확인되지 않았으나, 위 conda-forge 방식이면 env 변수 자체가 불필요하다.)
+
+### 2.2 `FlagEmbedding` 은 1.3.2 로 고정
+
+최신 1.4.0 은 `AutoModel.from_pretrained(dtype=...)` 를 호출하는데, 이 kwarg 는 훨씬 최신 `transformers` 에만 있다.
+핀된 `transformers==4.44.2` 와 조합하면 `FlagModel` 생성 시점에 죽는다:
+
+```
+TypeError: BertModel.__init__() got an unexpected keyword argument 'dtype'
+```
+
+`SH-Recall` 이 통째로 막힌다. **1.3.2 는 `transformers==4.44.2` 를 정확히 핀하는 마지막 릴리스**라
+레포의 다른 핀들과 정확히 맞물린다 (`datasets==2.19.0` 도 함께 내려간다).
 
 `requirements.txt` 에 명시되지 않았지만 **전이 의존성으로 반드시 설치되는** 것들 (누락 시 import 에러):
 
