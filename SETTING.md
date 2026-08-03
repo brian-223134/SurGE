@@ -358,4 +358,29 @@ elif n > c and n > e:
 - **실험 환경**: 8× A100 40GB, 1TB RAM.
 - **SHR 임베딩 모델**: `bge-large-en-v1.5` (코드 기본값과 일치).
 - **메타평가**: SQS 의 인간 순위 상관 Kendall τ = 0.805 (GT 포함) / 0.610 (GT 제외), CQS 는 0.797 / 0.594.
-- **미해결**: 레포의 `baselines/ID` 가 무엇인지 논문으로 확정되지 않는다. 논문 베이스라인은 RAG / AutoSurvey / StepSurvey / SurveyForge 인데 레포에는 `ID` / `Autosurvey` / `Naive` 만 있다. `Naive` 는 RAG 로 보이나 `ID` 는 대응이 불분명하다.
+- **`baselines/ID` = StepSurvey** (실측으로 확정). 논문에는 대응표가 없으나, `baselines/ID/output` 41편을 평가하면 Table 4 의 StepSurvey 행과 소수점 4자리까지 일치한다. §9.6 참조.
+
+### 9.6 재현 검증 — 셋업이 맞는지 확인하는 가장 확실한 방법
+
+`baselines/ID/output` 을 평가해서 아래 수치가 나오면 환경이 정확히 맞는 것이다:
+
+```bash
+python src/test_final.py --passage_dir ./baselines/ID/output \
+  --eval_list Coverage SH-Recall Relevance-Paper Relevance-Section Relevance-Sentence \
+  --device 0 --api_key dummy --save_path /tmp/ID_log.json
+```
+
+| 지표 | 재현값 | 논문 Table 4 (StepSurvey) |
+|---|---|---|
+| Coverage (Recall) | 0.0630 | 0.0630 |
+| Relevance-Paper (Doc-Acc) | 0.4576 | 0.4576 |
+| Relevance-Section (Sec-Acc) | 0.4571 | 0.4571 |
+| Relevance-Sentence (Sent-Acc) | 0.4636 | 0.4636 |
+| SH-Recall (SHR) | 0.9763 | 0.9763 |
+
+소요 시간: 41편 **2분 40초** (L40S 1장, NLI 배치 추론).
+
+> `ROUGE-BLEU` 를 `--eval_list` 에 넣으면 **144 s/survey (약 37배)** 로 느려진다.
+> `rougeBleuFuncs.py:23-36` 이 생성 블록 × GT 섹션 **전 조합**을 이중 루프로 ROUGE 스코어링하는데
+> (survey 당 약 1,700 회, 각각 stemmer + LCS) 단일 스레드 CPU 작업이라 GPU 가 놀게 된다.
+> 정식 지표도 아니므로(§9.2) 일상적인 반복 평가에서는 빼는 편이 낫다.
