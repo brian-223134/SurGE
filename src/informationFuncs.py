@@ -4,6 +4,9 @@ import numpy as np
 from scipy.spatial.distance import pdist
 
 import gc
+import logging
+
+logger = logging.getLogger(__name__)
 
 def eval_coverage(target_cites:list, gen_cite_map:dict):
     gen_cites = []
@@ -34,14 +37,16 @@ def eval_relevance_paper(target_survey,gen_cite_map:dict,cite_content:dict,nli_m
                 nli_pairs.append(cite_content[k])
     
     if len(nli_pairs) > 0:  
-        print("Eval relevanve paper")
-        print(gen_cite_map)
-        print(nli_pairs)
+        logger.debug("Relevance-Paper: NLI 판정 대상 %d쌍 (전체 인용 %d건)", len(nli_pairs), len(gen_cite_map))
+        logger.debug("gen_cite_map=%s", gen_cite_map)
+        logger.debug("nli_pairs=%s", nli_pairs)
         
         scores = nli_model.predict(nli_pairs)
         
         label_mapping = ['contradiction', 'entailment', 'neutral']
-        # 计算 entailment 的 Softmax 值
+        # [비활성] entailment 의 Softmax 확률을 계산하던 이전 방식.
+        # 로짓에 softmax 를 씌워 entailment 확률만 뽑고, 0.6 을 넘으면 1점을 주는 임계값 방식이었다.
+        # 현재는 아래처럼 세 로짓의 대소 비교(argmax)에 0.5 부분점수를 더한 방식을 쓴다.
         # values = torch.nn.functional.softmax(torch.tensor(scores), dim=1)
         # entailment_probs = values[:,1].tolist()
         # print("Papaer possibilities")
@@ -49,7 +54,7 @@ def eval_relevance_paper(target_survey,gen_cite_map:dict,cite_content:dict,nli_m
         # for i in entailment_probs:
         #     if i > 0.6:
         #         hit += 1
-        
+
         for c,e,n in scores:
             if e > c and e > n:
                 hit += 1
@@ -119,7 +124,9 @@ def eval_relevance_sentence(nli_pairs_origin,nli_model):
     if len(nli_pairs) > 0:
         scores = nli_model.predict(nli_pairs)
         label_mapping = ['contradiction', 'entailment', 'neutral']
-        # 计算 entailment 的 Softmax 值
+        # [비활성] entailment 의 Softmax 확률을 계산하던 이전 방식.
+        # 로짓에 softmax 를 씌워 entailment 확률만 뽑고, 0.6 을 넘으면 1점을 주는 임계값 방식이었다.
+        # 현재는 아래처럼 세 로짓의 대소 비교(argmax)에 0.5 부분점수를 더한 방식을 쓴다.
         # values = torch.nn.functional.softmax(torch.tensor(scores), dim=1)
         # entailment_probs = values[:,1].tolist()
         # print("sentence possibilities")
@@ -275,17 +282,27 @@ Provide only the score as a single number (0-5), without any additional explanat
     return prompt
 
 
-def chat_openai(prompt, client,try_number):
-    if try_number == 5:
-        print("Failed to get valid response after 5 tries.")
+def chat_openai(prompt, client,try_number,model="gpt-4o",max_retries=5):
+    """판정 LLM 을 호출해 0-5 정수 하나를 받아온다.
+
+    응답이 '0'~'5' 한 글자와 정확히 일치하지 않으면 재귀적으로 재시도하며,
+    max_retries 회에 도달하면 포기하고 None 을 돌려준다.
+    (상한이 없으면 형식을 못 맞추는 모델에서 호출이 무한히 늘어난다.)
+    """
+    if try_number >= max_retries:
+        logger.error(
+            "CQS 판정 실패: %d회 재시도 후에도 0-5 형식 응답을 받지 못했다 (model=%s)",
+            max_retries, model,
+        )
         #result_queue.put(None)
+        return None
     #print(f"Try {try_number} time")
     #print("Query:")
     #print(prompt)
-    
+
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant"},
                 {"role": "user", "content": prompt},
@@ -296,37 +313,53 @@ def chat_openai(prompt, client,try_number):
         #print(f"Answer:{response.choices[0].message.content}")
         
         ans = None
-        if not re.match(r'^[0-5]$', response.choices[0].message.content):
-            ans =  chat_openai(prompt,client,try_number + 1)
+        content = response.choices[0].message.content
+        if content is None or not re.match(r'^[0-5]$', content):
+            logger.warning(
+                "CQS 응답 형식 불일치 (시도 %d/%d, model=%s): %r",
+                try_number + 1, max_retries, model, (content or "")[:100],
+            )
+            ans =  chat_openai(prompt,client,try_number + 1,model,max_retries)
         else :
-            ans = int(response.choices[0].message.content)
+            ans = int(content)
         #result_queue.put(ans)
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return chat_openai(prompt,client,try_number + 1)
-        
+        logger.warning("CQS API 호출 실패 (시도 %d/%d): %s", try_number + 1, max_retries, e)
+        return chat_openai(prompt,client,try_number + 1,model,max_retries)
+
     return ans
 
 
 
     
-def eval_logic_client(psg_node: MarkdownNode, client):
+def eval_logic_client(psg_node: MarkdownNode, client, model="gpt-4o", max_retries=5):
     psgs = get_content_list(psg_node)
     np.random.seed(42)
     num_samples = min(len(psgs), 20)
     psgs = np.random.choice(psgs, num_samples, replace=False)
 
-    result = 0
-    
+    scores = []
+    failed = 0
+
     for i in range(len(psgs)):
         if len(psgs[i]) > 1000:
             psgs[i] = psgs[i][:1000]
             if psgs[i][-1] != '.':
                 psgs[i] = psgs[i][:psgs[i].rfind('.')]
-        result += chat_openai(get_logic_check_prompt(psgs[i]), client, 0)
+        score = chat_openai(get_logic_check_prompt(psgs[i]), client, 0, model, max_retries)
+        # 판정에 실패한 문단은 0점으로 세지 않고 평균에서 제외한다.
+        if score is None:
+            failed += 1
+            continue
+        scores.append(score)
 
-        
-    return result/len(psgs)
+    if failed:
+        logger.error("CQS: %d/%d 문단이 판정 실패로 평균에서 제외됐다", failed, len(psgs))
+    if not scores:
+        logger.error("CQS: 모든 문단이 판정 실패했다. 0 을 반환한다")
+        return 0
+
+    return sum(scores)/len(scores)
 
 
 # def chat(text,model,tokenizer,try_number):

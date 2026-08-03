@@ -240,9 +240,23 @@ If some of the evaluations are abnormal, you may need to modify the code that se
 
 `--device` : Device ID for computation. Default is 0.
 
-`--api_key` : API key for evaluation services.
+`--api_key` : API key for evaluation services. Falls back to `OPENROUTER_API_KEY`, then `OPENAI_API_KEY`.
+
+`--base_url` : OpenAI-compatible endpoint for the judge model, e.g. `https://openrouter.ai/api/v1`. Falls back to `OPENROUTER_BASE_URL`, then `OPENAI_BASE_URL`. Omit to call OpenAI directly.
+
+`--model` : LLM-as-Judge model used by `Structure_Quality` and `Logic`. Falls back to `SURGE_JUDGE_MODEL`, then `gpt-4o`.
+
+`--max_retries` : How many times to re-ask the judge when it does not reply with a bare `0`-`5`. Falls back to `SURGE_MAX_RETRIES`, then `5`. On exhaustion the judgment is abandoned and logged at `ERROR`; `Structure_Quality` records `0` and `Logic` drops that paragraph from its average.
+
+`--log_level` : `DEBUG`, `INFO`, `WARNING` or `ERROR`. Falls back to `SURGE_LOG_LEVEL`, then `INFO`.
+
+`--log_file` : Additionally write logs to this path. Falls back to `SURGE_LOG_FILE`. Logs always go to stderr.
 
 `--save_path` : Path to save evaluation results.
+
+These can also be supplied through a `.env` file in the repository root; copy `.env.example` to `.env` and fill it in. Command-line arguments take precedence over the environment. Only `Structure_Quality` and `Logic` need an API key — the other five metrics run offline.
+
+Note that the SQS and CQS numbers reported in the paper were produced with `gpt-4o`; scores from a different judge model are not directly comparable to them.
 
 As for `eval_list`, we have the choices below:
 

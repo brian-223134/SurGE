@@ -1,9 +1,12 @@
 import re
 from markdownParser import *
 
-import os 
+import os
 import gc
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 def calc_sim(A, B, model):
     embedding_A = model.encode(A)  # Shape: (len(A), embedding_dim)
@@ -149,14 +152,24 @@ Analyze the generated titles based on the criteria above and provide a single sc
     return prompt
 
     
-def chat_openai(prompt, client, try_number):
-    if try_number == 5:
-        print("Failed to get valid response after 5 tries.")
+def chat_openai(prompt, client, try_number, model="gpt-4o", max_retries=5):
+    """판정 LLM 을 호출해 0-5 정수 하나를 받아온다.
+
+    응답이 '0'~'5' 한 글자와 정확히 일치하지 않으면 재귀적으로 재시도하며,
+    max_retries 회에 도달하면 포기하고 None 을 돌려준다.
+    (상한이 없으면 형식을 못 맞추는 모델에서 호출이 무한히 늘어난다.)
+    """
+    if try_number >= max_retries:
+        logger.error(
+            "SQS 판정 실패: %d회 재시도 후에도 0-5 형식 응답을 받지 못했다 (model=%s)",
+            max_retries, model,
+        )
+        return None
     #print(f"Try {try_number} time")
     #print(prompt)
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant"},
                 {"role": "user", "content": prompt},
@@ -166,17 +179,22 @@ def chat_openai(prompt, client, try_number):
         )
         #print(f"Answer:{response.choices[0].message.content}")
         ans = None
-        if not re.match(r'^[0-5]$', response.choices[0].message.content):
-            ans =  chat_openai(prompt,client,try_number + 1)
+        content = response.choices[0].message.content
+        if content is None or not re.match(r'^[0-5]$', content):
+            logger.warning(
+                "SQS 응답 형식 불일치 (시도 %d/%d, model=%s): %r",
+                try_number + 1, max_retries, model, (content or "")[:100],
+            )
+            ans =  chat_openai(prompt,client,try_number + 1,model,max_retries)
         else :
-            ans = int(response.choices[0].message.content)
+            ans = int(content)
         return ans
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return chat_openai(prompt,client,try_number + 1)    
+        logger.warning("SQS API 호출 실패 (시도 %d/%d): %s", try_number + 1, max_retries, e)
+        return chat_openai(prompt,client,try_number + 1,model,max_retries)
     
 
-def eval_structure_quality_client(target_survey,psg_node:MarkdownNode,client):
+def eval_structure_quality_client(target_survey,psg_node:MarkdownNode,client,model="gpt-4o",max_retries=5):
     target_titles = ""
     for section in target_survey['structure']:
         if section['title'] == "root":
@@ -189,6 +207,11 @@ def eval_structure_quality_client(target_survey,psg_node:MarkdownNode,client):
         return 0
     
     prompt = gen_title_structure_compare_prompt(target_titles,gen_titles)
-    
-    return chat_openai(prompt,client,0)
+
+    score = chat_openai(prompt,client,0,model,max_retries)
+    if score is None:
+        # 판정 실패는 0점으로 떨어뜨린다. 위 logger.error 로 이미 기록됐다.
+        logger.error("SQS 를 0 으로 처리한다 (survey_title=%r)", target_survey.get('survey_title'))
+        return 0
+    return score
     

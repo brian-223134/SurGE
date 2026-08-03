@@ -35,9 +35,10 @@ htmlcov/
 .ipynb_checkpoints/
 
 # --- Secrets ---
-# OpenAI keys are passed via --api_key; never let one land in the repo.
+# API keys come from .env (see .env.example); never let one land in the repo.
 .env
 .env.*
+!.env.example
 *.key
 secrets.json
 

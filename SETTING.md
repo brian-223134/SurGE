@@ -209,15 +209,72 @@ python src/test_final.py \
 | `ROUGE-BLEU` | R-L / BLEU — **정식 지표 아님** | 없음 (CPU) | surveys.json | §9.2 참조. 100자 이상 블록만 |
 | `ALL` | 위 전부 | 전부 | 전부 | |
 
-### OpenAI 이외의 엔드포인트를 쓸 때
+### 판정 LLM 설정 (`.env` / CLI)
 
-`src/evaluator.py:31` 의 클라이언트 생성부를 고친다. 바로 위에 DeepSeek 예시가 주석으로 있다:
+SQS·CQS 에 쓸 모델과 엔드포인트는 **코드 수정 없이** 바꿀 수 있다. 우선순위는 **CLI 인자 > `.env`/환경변수 > 기본값**.
 
-```python
-self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+```bash
+cp .env.example .env      # 그 뒤 키 입력. .env 는 .gitignore 로 커밋되지 않는다
 ```
 
-단, `structureFuncs.py:159` 와 `informationFuncs.py:288` 에 `model="gpt-4o"` 가 하드코딩되어 있으므로 모델명도 같이 바꿔야 한다.
+`.env` 항목:
+
+| 변수 | 대응 CLI | 기본값 |
+|---|---|---|
+| `OPENROUTER_API_KEY` → `OPENAI_API_KEY` 순으로 탐색 | `--api_key` | 없음 |
+| `OPENROUTER_BASE_URL` → `OPENAI_BASE_URL` 순으로 탐색 | `--base_url` | OpenAI 기본 엔드포인트 |
+| `SURGE_JUDGE_MODEL` | `--model` | `gpt-4o` |
+| `SURGE_MAX_RETRIES` | `--max_retries` | `5` |
+| `SURGE_LOG_LEVEL` | `--log_level` | `INFO` |
+| `SURGE_LOG_FILE` | `--log_file` | 없음 (stderr 만) |
+
+```bash
+# OpenRouter 로 판정
+python src/test_final.py --passage_dir ./baselines/ID/output --eval_list ALL \
+  --base_url https://openrouter.ai/api/v1 --model openai/gpt-4o --device 0
+
+# .env 에 다 넣어뒀다면 인자 없이
+python src/test_final.py --passage_dir ./baselines/ID/output --eval_list ALL --device 0
+```
+
+실행 시작 시 `judge: model=... base_url=... max_retries=...` 가 로그로 찍히므로 어떤 모델로 채점 중인지 항상 확인할 수 있다.
+`SQS`/`CQS` 를 요청했는데 키가 없으면 corpus 를 읽기 **전에** 멈춘다 (비-API 지표만 돌릴 때는 키가 필요 없다).
+
+### 재시도 상한 — 다른 판정 모델을 쓸 때 반드시 확인
+
+`chat_openai` 는 응답이 `^[0-5]$` 와 정확히 일치할 때까지 자기 자신을 재귀 호출한다. **원본 코드에는 종료 조건이 없어서**,
+형식을 못 맞추는 모델(설명을 덧붙이거나, `max_tokens=100` 을 reasoning 토큰으로 다 써서 `content=None` 을 내는 모델)을 물리면
+호출 1건이 파이썬 재귀 한계까지 수백~수천 번 API 를 두드린다. `--max_retries` 로 이 상한을 잡는다.
+
+```
+max_retries=3  ->  API 호출 정확히 3회 후 포기
+max_retries=5  ->  API 호출 정확히 5회 후 포기   (기본값)
+```
+
+상한에 걸리면:
+
+- 매 시도마다 `WARNING` 으로 실제 응답 앞 100자를 남긴다 → 어떤 형식으로 어긋나는지 바로 보인다
+- 포기 시 `ERROR` 를 남기고, **SQS 는 0 점 처리**, **CQS 는 해당 문단을 평균에서 제외**한다
+  (0 으로 세면 평균이 부당하게 내려가므로)
+
+```
+[WARNING] structureFuncs: SQS 응답 형식 불일치 (시도 1/5, model=fake/model): 'The score is 4 because...'
+[ERROR]   structureFuncs: SQS 판정 실패: 5회 재시도 후에도 0-5 형식 응답을 받지 못했다 (model=fake/model)
+[ERROR]   informationFuncs: CQS: 3/20 문단이 판정 실패로 평균에서 제외됐다
+```
+
+**로그에 위 `ERROR` 가 보이면 그 실행의 SQS/CQS 수치는 신뢰하지 말 것.** 판정 모델을 바꾸는 것이 첫 대응이다.
+
+### 로깅
+
+모든 진단 출력이 `logging` 으로 나간다 (stderr, 타임스탬프 포함). 최종 결과만 `print` 로 stdout 에 남아 파이프/grep 하기 좋다.
+
+```bash
+python src/test_final.py ... --log_level DEBUG --log_file logs/eval.log
+```
+
+`DEBUG` 는 이 저장소 코드에만 적용된다 — `transformers`/`sentence_transformers` 등 서드파티는 `INFO`,
+`httpx`/`openai` 는 `WARNING` 으로 묶여 있어 로그가 묻히지 않는다.
 
 ---
 

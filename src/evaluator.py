@@ -2,6 +2,7 @@ import json
 import argparse
 import time
 import re
+import logging
 import markdownParser,rougeBleuFuncs,structureFuncs,informationFuncs
 import os
 from sentence_transformers import CrossEncoder
@@ -11,24 +12,35 @@ from FlagEmbedding import FlagModel
 from openai import OpenAI
 import httpx
 
+logger = logging.getLogger(__name__)
+
 def normalize_string(s):
         letters = re.findall(r'[a-zA-Z]', s)
         return ''.join(letters).lower()
 
 class SurGEvaluator:
-    def __init__(self,device:str = None,survey_path:str = None,corpus_path:str = None,flag_model_path:str = None, judge_model_path:str = None, bertopic_model_path:str = None,bertopic_embedding_model_path:str = None, nli_model_path:str = None, using_openai:bool = True, api_key:str = None):
+    def __init__(self,device:str = None,survey_path:str = None,corpus_path:str = None,flag_model_path:str = None, judge_model_path:str = None, bertopic_model_path:str = None,bertopic_embedding_model_path:str = None, nli_model_path:str = None, using_openai:bool = True, api_key:str = None, base_url:str = None, judge_model_name:str = "gpt-4o", max_retries:int = 5):
         import os
         if device != None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
 
-        
+
         self.corpus_dir = corpus_path
+
+        # LLM-as-Judge(SQS/CQS)에 쓸 모델 이름. base_url 을 함께 주면
+        # OpenAI 호환 엔드포인트(OpenRouter, DeepSeek 등)로 그대로 라우팅된다.
+        self.judge_model_name = judge_model_name
+        # 판정 응답이 0-5 형식을 못 맞출 때의 재시도 상한.
+        self.max_retries = max_retries
 
         self.using_openai = using_openai
         if using_openai == True:
             assert api_key != None
             #self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-            self.client = OpenAI(api_key=api_key)
+            if base_url:
+                self.client = OpenAI(api_key=api_key, base_url=base_url)
+            else:
+                self.client = OpenAI(api_key=api_key)
         else:
             self.client = None
         
@@ -135,7 +147,7 @@ class SurGEvaluator:
             #         device_map="auto"
             #     )
             if self.using_openai == True:
-                struct_quality = structureFuncs.eval_structure_quality_client(self.survey_map[survey_id],psg_node,self.client)
+                struct_quality = structureFuncs.eval_structure_quality_client(self.survey_map[survey_id],psg_node,self.client,self.judge_model_name,self.max_retries)
             else:
                 pass 
                 # struct_quality = structureFuncs.eval_structure_quality(self.survey_map[survey_id],psg_node,self.judge_model,self.judge_model_tokenizer)
@@ -287,7 +299,7 @@ class SurGEvaluator:
             #         device_map="auto"
             #     )
             if self.using_openai == True:
-                logic = informationFuncs.eval_logic_client(psg_node,self.client)
+                logic = informationFuncs.eval_logic_client(psg_node,self.client,self.judge_model_name,self.max_retries)
             else:
                 pass 
                 #logic = informationFuncs.eval_logic(psg_node,self.judge_model,self.judge_model_tokenizer)
@@ -374,21 +386,17 @@ class SurGEvaluator:
                 with open (save_path,"a",encoding='utf-8') as f:
                     json.dump(tmp_res,f,ensure_ascii=False,indent=4)
                     f.write('\n')
-                print(f"Result of {survey_id}")
-                print(tmp_res)
+                logger.info("Result of %s: %s", survey_id, tmp_res)
             else:
-                print(f"Result of {survey_id}")
-                print(tmp_res)    
+                logger.info("Result of %s: %s", survey_id, tmp_res)
         
         if save_path != None:
             eval_result['survey_id'] = "Average"
             with open (save_path,"a",encoding='utf-8') as f:
                 f.write('\n')
                 json.dump(eval_result,f,ensure_ascii=False,indent=4)
-                print("Total Result:")
-                print(eval_result)
+                logger.info("Total Result: %s", eval_result)
         else:
-            print("Total Result:")
-            print(eval_result)
+            logger.info("Total Result: %s", eval_result)
             
         return eval_result
