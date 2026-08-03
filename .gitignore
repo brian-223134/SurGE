@@ -1,0 +1,91 @@
+# --- SurGE data ---
+# corpus.json / surveys.json / queries.json are multi-GB downloads (see SETTING.md §3)
+data/
+
+# Evaluation results written next to a baseline's output dir.
+# Deliberately narrow: baselines/*/output/<survey_id>/*.json is committed data.
+baselines/*/output/log.json
+baselines/*/output/*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtualenvs (conda envs live outside the repo)
+.venv/
+venv/
+env/
+ENV/
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# --- Secrets ---
+# OpenAI keys are passed via --api_key; never let one land in the repo.
+.env
+.env.*
+*.key
+secrets.json
+
+# --- Model / dataset caches ---
+.cache/
+huggingface/
+models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+
+# --- Logs & scratch ---
+*.log
+logs/
+outputs/
+tmp/
+scratch/
+nohup.out
+
+# --- Editors / IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- macOS ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# --- Windows / Linux desktop ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.directory
+
+# --- LaTeX build artifacts (gt_surveys.tex, data_field.tex) ---
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
