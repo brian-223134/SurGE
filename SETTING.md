@@ -197,17 +197,17 @@ python src/test_final.py \
 
 ### 지표별 요구사항
 
-| `--eval_list` 값 | 모델/API | 필요 데이터 | 비고 |
-|---|---|---|---|
-| `ROUGE-BLEU` | 없음 (CPU) | surveys.json | 100자 이상 블록만 |
-| `SH-Recall` | `BAAI/bge-large-en-v1.5` (GPU, fp16) | surveys.json | soft heading recall |
-| `Structure_Quality` | **OpenAI gpt-4o** | surveys.json | 0–5 정수, 제목 5개 미만이면 0 |
-| `Coverage` | 없음 | surveys + corpus | GT `all_cites` 중 맞힌 비율 |
-| `Relevance-Paper` | `cross-encoder/nli-deberta-v3-base` (GPU) | surveys + corpus | entailment 판정 |
-| `Relevance-Section` | 동일 NLI 모델 | corpus.json | 섹션 제목 ↔ 인용 문장 |
-| `Relevance-Sentence` | 동일 NLI 모델 | corpus.json | 문장 ↔ 인용 abstract |
-| `Logic` | **OpenAI gpt-4o** | 없음 | 블록 최대 20개 샘플(seed 42), 1000자 절단 |
-| `ALL` | 위 전부 | 전부 | |
+| `--eval_list` 값 | 논문 표기 | 모델/API | 필요 데이터 | 비고 |
+|---|---|---|---|---|
+| `Coverage` | **Recall** (§4.1) | 없음 | surveys + corpus | GT `all_cites` 중 맞힌 비율 |
+| `Relevance-Paper` | **Doc-Acc** (§4.2) | `cross-encoder/nli-deberta-v3-base` (GPU) | surveys + corpus | GT 인용에 있으면 무조건 1점 |
+| `Relevance-Section` | **Sec-Acc** (§4.2) | 동일 NLI 모델 | corpus.json | 섹션 제목 ↔ 인용 논문 |
+| `Relevance-Sentence` | **Sent-Acc** (§4.2) | 동일 NLI 모델 | corpus.json | 문장 ↔ 인용 논문 |
+| `Structure_Quality` | **SQS** (§4.3) | **OpenAI gpt-4o** | surveys.json | 0–5 정수, 제목 5개 미만이면 0 |
+| `SH-Recall` | **SHR** (§4.3) | `BAAI/bge-large-en-v1.5` (GPU, fp16) | surveys.json | soft cardinality 기반 |
+| `Logic` | **CQS** (§4.4) | **OpenAI gpt-4o** | 없음 | 블록 최대 20개 샘플(seed 42), 1000자 절단 |
+| `ROUGE-BLEU` | R-L / BLEU — **정식 지표 아님** | 없음 (CPU) | surveys.json | §9.2 참조. 100자 이상 블록만 |
+| `ALL` | 위 전부 | 전부 | 전부 | |
 
 ### OpenAI 이외의 엔드포인트를 쓸 때
 
@@ -260,3 +260,102 @@ myfork   git@github.com:brian-223134/SurGE.git         (SSH, push 대상 / main 
 `corpus.json` — 1,086,992편. `doc_id`, `Title`, `Abstract` 를 평가에 쓴다 (`Title`→`doc_id` 역인덱스, `Abstract`는 NLI 전제).
 
 `queries.json` — 리트리버 학습용. `prefix_titles_query`(질의) ↔ `cites`(정답 doc_id). train/dev 분할은 직접 해야 한다.
+
+---
+
+## 9. 논문(SurGE.pdf) 대조
+
+레포 루트의 `SurGE.pdf` (SIGIR '26) 기준. 코드만 봐서는 알 수 없는 설계 의도와, **코드와 논문이 어긋나는 지점**을 정리한다.
+
+### 9.1 목표 수치 (논문 Table 4)
+
+Qwen2.5-14B-Instruct 로 통일한 베이스라인 결과. 구현 시 참고할 기준선:
+
+| Baseline | Recall | Doc-Acc | Sec-Acc | Sent-Acc | SQS | SHR | CQS |
+|---|---|---|---|---|---|---|---|
+| RAG-Qwen | 0.0214 | 0.2857 | 0.2502 | 0.2500 | 0.6829 | **0.7900** | 4.6723 |
+| RAG-GPT | 0.0419 | 0.4525 | 0.3166 | 0.3226 | 0.7561 | 0.6659 | **4.9250** |
+| RAG-Gemini | **0.0784** | **0.4680** | **0.4056** | **0.4124** | **1.2927** | 0.7591 | 4.5619 |
+| AutoSurvey | 0.0351 | 0.3617 | **0.4935** | **0.4870** | **1.3902** | 0.9697 | 4.7390 |
+| StepSurvey | 0.0630 | 0.4576 | 0.4571 | 0.4636 | 1.1951 | **0.9763** | **4.8451** |
+| SurveyForge | **0.0868** | **0.4719** | 0.4651 | 0.4772 | 1.0537 | 0.9493 | 4.8070 |
+
+**Recall 이 8% 대에 그친다.** 반면 리트리버 자체는 R@1000 = 0.6805 (BM25 는 0.2715) 로 상한이 68%다 (§6.1).
+즉 병목은 검색이 아니라 **검색된 근거를 생성 단계에서 실제로 인용에 반영하는 능력**이다. 논문이 지목한 핵심 개선 포인트.
+
+### 9.2 ROUGE / BLEU 는 공식 지표가 아니다
+
+논문 §4.4: *"both ROUGE and BLEU are provided strictly for reference and do not constitute part of the metric suite in our SurGE benchmark."*
+n-gram 매칭이 개방형 과학 텍스트의 의미적 정확성을 못 잡는다는 이유. 성능 보고 시 주 지표로 쓰지 말 것.
+
+### 9.3 코드 ↔ 논문 불일치 ★ 실측 확인함
+
+**(a) 부분점수 0.5 조건이 코드에서 더 엄격하다**
+
+논문 식 (2):
+
+```
+y(r) = 1     if p_ent > max(p_neu, p_con)
+       0.5   if p_neu > max(p_ent, p_con)
+       0     otherwise
+```
+
+코드 (`informationFuncs.py` 의 3개 함수 모두 동일):
+
+```python
+if e > c and e > n:      hit += 1
+elif n > c and n > e:
+    if e > c:            hit += 0.5      # ← 논문에 없는 추가 조건
+```
+
+`p_neu` 가 최대이면서 `p_con > p_ent` 인 경우, 논문은 0.5 를 주지만 코드는 0 을 준다.
+
+**(b) NLI 입력 쌍 순서가 레벨마다 다르다**
+
+논문 §4.2 는 premise = 인용 논문 내용, hypothesis = 관련성 주장으로 고정한다. 코드는:
+
+| 레벨 | 실제 전달 순서 | 논문과 일치? |
+|---|---|---|
+| `Relevance-Paper` | `(paper_content, claim)` | O |
+| `Relevance-Section` | `(claim, paper_content)` | **X — 뒤집힘** |
+| `Relevance-Sentence` | `(claim, paper_content)` | **X — 뒤집힘** |
+
+`evaluator.py:205-206` 이 `(sen_1, sen_section)` = (premise, hypothesis) 로 만들지만,
+`eval_relevance_section` 이 `for citation, subtitle in ...` 로 받아 `(subtitle, citation)` 으로 되돌려 넣으면서 순서가 반전된다.
+
+**영향 실측** — 동일한 논문/섹션 쌍에 대해:
+
+```
+논문 순서 (premise, hypothesis) : [con, ent, neu] = [-4.123, 0.435,  3.129]  -> 0.5
+코드 순서 (hypothesis, premise) : [con, ent, neu] = [-6.852, 3.588,  2.137]  -> 1.0
+```
+
+같은 내용이 0.5 와 1.0 으로 갈린다. **평가기를 고치지 말 것** — 논문 Table 4 수치가 이 코드로 산출된 값이므로,
+비교 가능성을 유지하려면 있는 그대로 쓰고 이 사실만 인지하면 된다.
+
+### 9.4 리트리버 학습 프로토콜 (§5.1, §5.3)
+
+`queries.json` 으로 학습할 때의 논문 설정:
+
+- 구조: RoBERTa-base **dual encoder**, 쿼리/문서 인코더 **파라미터 공유**. 입력은 `[CLS] q [SEP]`, `[CLS] d [SEP]`, 최종층 `[CLS]` 벡터 사용.
+- 점수: `s(q,d) = h_q · h_d` (dot product)
+- 손실: positive 1개 + corpus 에서 무작위 샘플한 negative N개에 대한 softmax cross-entropy
+- 분할: **train:test = 4:1 무작위**
+- 최적화: AdamW, lr **5e-6**, **10 epochs**, fp16
+- 추론: 토픽당 **top-100** 검색 → 생성 단계 입력
+
+성능 (§6.1, Table 3):
+
+| Model | R@20 | R@100 | R@1000 |
+|---|---|---|---|
+| BM25 | 0.0548 | 0.1193 | 0.2715 |
+| PR (논문 리트리버) | 0.1706 | 0.3665 | 0.6805 |
+
+### 9.5 기타 확정 사항
+
+- **테스트셋**: 논문은 GT 205편 중 테스트 인스턴스 수를 명시하지 않는다. 레포의 `baselines/*/output` 은 `survey_id` **0–40 (41편)** 이며, 리트리버 학습 분할이 4:1 이므로 205 × 1/5 ≈ 41 과 일치한다.
+- **베이스라인 base LLM**: 전부 **Qwen2.5-14B-Instruct** 로 통일. RAG 만 GPT-4o / Gemini-2.5-Pro-Thinking 변형 추가.
+- **실험 환경**: 8× A100 40GB, 1TB RAM.
+- **SHR 임베딩 모델**: `bge-large-en-v1.5` (코드 기본값과 일치).
+- **메타평가**: SQS 의 인간 순위 상관 Kendall τ = 0.805 (GT 포함) / 0.610 (GT 제외), CQS 는 0.797 / 0.594.
+- **미해결**: 레포의 `baselines/ID` 가 무엇인지 논문으로 확정되지 않는다. 논문 베이스라인은 RAG / AutoSurvey / StepSurvey / SurveyForge 인데 레포에는 `ID` / `Autosurvey` / `Naive` 만 있다. `Naive` 는 RAG 로 보이나 `ID` 는 대응이 불분명하다.
