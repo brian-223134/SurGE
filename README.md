@@ -167,7 +167,7 @@ gdown
 socksio
 ```
 
-**Note on `torch`:** the pinned wheel is the CUDA 12.1 build, which covers Ampere through Ada (sm_80–sm_89) GPUs such as the A100, L40S and RTX 40 series. `requirements.txt` already points pip at the matching PyTorch index, so no extra flag is needed.
+**Note on `torch`:** the pinned wheel is the CUDA 12.1 build. The previous pin, `torch==1.13.1+cu117`, predates CUDA 11.8 — the release that introduced Ada (sm_89) support — so it ships no Ada-tuned cuBLAS/cuDNN kernels for GPUs such as the L40S or the RTX 40 series. `torch==2.4.1` on CUDA 12.1 has been verified on an L40S and pairs with the `transformers` and `numpy` versions pinned above. `requirements.txt` already points pip at the matching PyTorch index, so no extra flag is needed.
 
 ### Setting Up Your Environment
 
