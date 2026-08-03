@@ -157,7 +157,7 @@ Before you begin, make sure you have the following packages installed in your en
 FlagEmbedding
 bertopic
 safetensors
-torch==1.13.1+cu117 
+torch==2.4.1        # CUDA 12.1 build
 rouge-score
 sacrebleu
 numpy==1.26.4
@@ -166,6 +166,8 @@ transformers==4.44.2
 gdown
 socksio
 ```
+
+**Note on `torch`:** the pinned wheel is the CUDA 12.1 build, which covers Ampere through Ada (sm_80–sm_89) GPUs such as the A100, L40S and RTX 40 series. `requirements.txt` already points pip at the matching PyTorch index, so no extra flag is needed.
 
 ### Setting Up Your Environment
 
@@ -187,7 +189,7 @@ Next, create an isolated Python environment and install all necessary dependenci
 ```git
 conda create -n surge python=3.10 -y
 conda activate surge
-pip install -r requirements.txt -f https://download.pytorch.org/whl/torch_stable.html
+pip install -r requirements.txt
 ```
 
 ## Quick Start
